@@ -1,7 +1,7 @@
 #!/usr/bin/python -tt
 
 import os
-from distutils.core import setup
+from setuptools import setup
 
 # Utility function to read the README file.
 # Used for the long_description.  It's nice, because now 1) we have a top level
@@ -10,7 +10,7 @@ from distutils.core import setup
 def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
-VERSION='0.4.0-pre'
+VERSION='0.4.0'
 NAME='grokmirror'
 
 setup(
@@ -23,4 +23,12 @@ setup(
     packages=[NAME],
     license='GPLv3+',
     long_description=read('README.rst'),
+    entry_points={
+        'console_scripts': [
+            "grok-dumb-pull=grokmirror.dumb_pull:command",
+            "grok-pull=grokmirror.pull:command",
+            "grok-fsck=grokmirror.fsck:command",
+            "grok-manifest=grokmirror.manifest:command",
+        ]
+    }
 )

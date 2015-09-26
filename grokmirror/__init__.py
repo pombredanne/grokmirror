@@ -17,7 +17,7 @@ import os
 import sys
 
 import time
-import json
+import anyjson
 import fnmatch
 
 import logging
@@ -35,6 +35,7 @@ REPO_LOCKH = {}
 
 # default logger. Will probably be overridden.
 logger = logging.getLogger(__name__)
+
 
 def _lockname(fullpath):
     lockpath = os.path.dirname(fullpath)
@@ -60,14 +61,15 @@ def lock_repo(fullpath, nonblocking=False):
     global REPO_LOCKH
     REPO_LOCKH[fullpath] = lockfh
 
+
 def unlock_repo(fullpath):
     global REPO_LOCKH
     if fullpath in REPO_LOCKH.keys():
         logger.debug('Unlocking %s' % fullpath)
-        repolock = _lockname(fullpath)
         lockf(REPO_LOCKH[fullpath], LOCK_UN)
         REPO_LOCKH[fullpath].close()
         del REPO_LOCKH[fullpath]
+
 
 def is_bare_git_repo(path):
     """
@@ -84,11 +86,12 @@ def is_bare_git_repo(path):
     logger.debug('Skipping %s: not a git repository' % path)
     return False
 
+
 def get_repo_timestamp(toplevel, gitdir):
     ts = 0
 
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-    tsfile   = os.path.join(fullpath, 'grokmirror.timestamp')
+    tsfile = os.path.join(fullpath, 'grokmirror.timestamp')
     if os.path.exists(tsfile):
         tsfh = open(tsfile, 'r')
         contents = tsfh.read()
@@ -96,16 +99,17 @@ def get_repo_timestamp(toplevel, gitdir):
         try:
             ts = int(contents)
             logger.debug('Timestamp for %s: %s' % (gitdir, ts))
-        except ValueError, ex:
+        except ValueError:
             logger.warning('Was not able to parse timestamp in %s' % tsfile)
     else:
         logger.debug('No existing timestamp for %s' % gitdir)
 
     return ts
 
+
 def set_repo_timestamp(toplevel, gitdir, ts):
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-    tsfile   = os.path.join(fullpath, 'grokmirror.timestamp')
+    tsfile = os.path.join(fullpath, 'grokmirror.timestamp')
 
     tsfh = open(tsfile, 'w')
     tsfh.write('%d' % ts)
@@ -113,9 +117,14 @@ def set_repo_timestamp(toplevel, gitdir, ts):
 
     logger.debug('Recorded timestamp for %s: %s' % (gitdir, ts))
 
+
 def get_repo_fingerprint(toplevel, gitdir, force=False):
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-    fpfile   = os.path.join(fullpath, 'grokmirror.fingerprint')
+    if not os.path.exists(fullpath):
+        logger.debug('Cannot fingerprint %s, as it does not exist' % fullpath)
+        return None
+
+    fpfile = os.path.join(fullpath, 'grokmirror.fingerprint')
     if not force and os.path.exists(fpfile):
         fpfh = open(fpfile, 'r')
         fingerprint = fpfh.read()
@@ -123,7 +132,16 @@ def get_repo_fingerprint(toplevel, gitdir, force=False):
         logger.debug('Fingerprint for %s: %s' % (gitdir, fingerprint))
     else:
         logger.debug('Generating fingerprint for %s' % gitdir)
-        repo = Repo(fullpath)
+
+        try:
+            repo = Repo(fullpath)
+        except:
+            logger.critical('Could not open %s. Bad repo?' % gitdir)
+            return None
+
+        if not len(repo.heads):
+            logger.debug('No heads in %s, nothing to fingerprint.' % fullpath)
+            return None
 
         # We add the final "\n" to be compatible with cmdline output
         # of git-show-ref
@@ -139,9 +157,10 @@ def get_repo_fingerprint(toplevel, gitdir, force=False):
 
     return fingerprint
 
+
 def set_repo_fingerprint(toplevel, gitdir, fingerprint=None):
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-    fpfile   = os.path.join(fullpath, 'grokmirror.fingerprint')
+    fpfile = os.path.join(fullpath, 'grokmirror.fingerprint')
 
     if fingerprint is None:
         fingerprint = get_repo_fingerprint(toplevel, gitdir, force=True)
@@ -153,7 +172,11 @@ def set_repo_fingerprint(toplevel, gitdir, fingerprint=None):
     logger.debug('Recorded fingerprint for %s: %s' % (gitdir, fingerprint))
     return fingerprint
 
-def find_all_gitdirs(toplevel, ignore=[]):
+
+def find_all_gitdirs(toplevel, ignore=None):
+    if ignore is None:
+        ignore = []
+
     logger.info('Finding bare git repos in %s' % toplevel)
     logger.debug('Ignore list: %s' % ' '.join(ignore))
     gitdirs = []
@@ -181,10 +204,11 @@ def find_all_gitdirs(toplevel, ignore=[]):
 
     return gitdirs
 
+
 def manifest_lock(manifile):
     global MANIFEST_LOCKH
     if MANIFEST_LOCKH is not None:
-        logger.debug('Manifest already locked')
+        logger.debug('Manifest %s already locked' % manifile)
 
     manilock = _lockname(manifile)
     MANIFEST_LOCKH = open(manilock, 'w')
@@ -192,14 +216,15 @@ def manifest_lock(manifile):
     lockf(MANIFEST_LOCKH, LOCK_EX)
     logger.debug('Manifest lock obtained')
 
+
 def manifest_unlock(manifile):
     global MANIFEST_LOCKH
     if MANIFEST_LOCKH is not None:
-        logger.debug('Unlocking manifest')
-        manilock = _lockname(manifile)
+        logger.debug('Unlocking manifest %s' % manifile)
         lockf(MANIFEST_LOCKH, LOCK_UN)
         MANIFEST_LOCKH.close()
         MANIFEST_LOCKH = None
+
 
 def read_manifest(manifile, wait=False):
     while True:
@@ -226,17 +251,20 @@ def read_manifest(manifile, wait=False):
         fh = open(manifile, 'r')
 
     logger.info('Reading %s' % manifile)
+    jdata = fh.read()
+    fh.close()
+
     try:
-        manifest = json.load(fh)
+        manifest = anyjson.deserialize(jdata)
     except:
         # We'll regenerate the file entirely on failure to parse
         logger.critical('Unable to parse %s, will regenerate' % manifile)
         manifest = {}
 
-    fh.close()
     logger.debug('Manifest contains %s entries' % len(manifest.keys()))
 
     return manifest
+
 
 def write_manifest(manifile, manifest, mtime=None, pretty=False):
     import tempfile
@@ -254,15 +282,19 @@ def write_manifest(manifile, manifest, mtime=None, pretty=False):
         if manifile.find('.gz') > 0:
             gfh = gzip.GzipFile(fileobj=fh, mode='wb')
             if pretty:
+                import json
                 json.dump(manifest, gfh, indent=2, sort_keys=True)
             else:
-                json.dump(manifest, gfh)
+                jdata = anyjson.serialize(manifest)
+                gfh.write(jdata)
             gfh.close()
         else:
             if pretty:
+                import json
                 json.dump(manifest, fh, indent=2, sort_keys=True)
             else:
-                json.dump(manifest, fh)
+                jdata = anyjson.serialize(manifest)
+                fh.write(jdata)
 
         os.fsync(fd)
         fh.close()
@@ -281,4 +313,3 @@ def write_manifest(manifile, manifest, mtime=None, pretty=False):
         if os.path.exists(tmpfile):
             logger.debug('Removing %s' % tmpfile)
             os.unlink(tmpfile)
-

@@ -1,16 +1,16 @@
-#!/usr/bin/python -tt
+#-*- coding: utf-8 -*-
 # Copyright (C) 2013 by The Linux Foundation and contributors
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
@@ -33,6 +33,7 @@ from fcntl import lockf, LOCK_EX, LOCK_UN, LOCK_NB
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)
 
+
 def run_git_repack(fullpath, config):
     if 'repack' not in config.keys() or config['repack'] != 'yes':
         return
@@ -48,16 +49,35 @@ def run_git_repack(fullpath, config):
 
     logger.debug('Running: GIT_DIR=%s %s' % (env['GIT_DIR'], ' '.join(args)))
 
-    (output, error) = subprocess.Popen(args, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, env=env).communicate()
+    (output, error) = subprocess.Popen(
+        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env).communicate()
 
     error = error.strip()
 
-    # Shouldn't return any errors, normally, so dump any of them into warn
+    # With newer versions of git, repack may return warnings that are safe to ignore
+    # so use the same strategy to weed out things we aren't interested in seeing
     if error:
-        logger.critical('Repacking %s returned errors:' % fullpath)
-        for entry in error.split('\n'):
-            logger.critical("\t%s" % entry)
+        # Put things we recognize as fairly benign into debug
+        debug = []
+        warn = []
+        for line in error.split('\n'):
+            ignored = False
+            for estring in config['ignore_errors']:
+                if line.find(estring) != -1:
+                    ignored = True
+                    debug.append(line)
+                    break
+            if not ignored:
+                warn.append(line)
+
+        if debug:
+            logger.debug('Stderr: %s' % '\n'.join(debug))
+        if warn:
+            logger.critical('Repacking %s returned critical errors:' % fullpath)
+            for entry in warn:
+                logger.critical("\t%s" % entry)
+
 
 def run_git_fsck(fullpath, config):
     # Lock the git repository so no other grokmirror process attempts to
@@ -66,7 +86,7 @@ def run_git_fsck(fullpath, config):
     # is available.
     try:
         grokmirror.lock_repo(fullpath, nonblocking=False)
-    except IOError, ex:
+    except IOError:
         logger.info('Could not obtain exclusive lock on %s' % fullpath)
         logger.info('Will run next time')
         return
@@ -77,15 +97,16 @@ def run_git_fsck(fullpath, config):
 
     logger.debug('Running: GIT_DIR=%s %s' % (env['GIT_DIR'], ' '.join(args)))
 
-    (output, error) = subprocess.Popen(args, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, env=env).communicate()
+    (output, error) = subprocess.Popen(
+        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env).communicate()
 
     error = error.strip()
 
     if error:
         # Put things we recognize as fairly benign into debug
         debug = []
-        warn  = []
+        warn = []
         for line in error.split('\n'):
             ignored = False
             for estring in config['ignore_errors']:
@@ -107,14 +128,16 @@ def run_git_fsck(fullpath, config):
 
     grokmirror.unlock_repo(fullpath)
 
-def fsck_mirror(name, config, opts):
+
+def fsck_mirror(name, config, verbose=False, force=False):
     global logger
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
 
     if 'log' in config.keys():
         ch = logging.FileHandler(config['log'])
-        formatter = logging.Formatter("[%(process)d] %(asctime)s - %(levelname)s - %(message)s")
+        formatter = logging.Formatter(
+            "[%(process)d] %(asctime)s - %(levelname)s - %(message)s")
         ch.setFormatter(formatter)
         loglevel = logging.INFO
 
@@ -129,7 +152,7 @@ def fsck_mirror(name, config, opts):
     formatter = logging.Formatter('%(message)s')
     ch.setFormatter(formatter)
 
-    if opts.verbose:
+    if verbose:
         ch.setLevel(logging.INFO)
     else:
         ch.setLevel(logging.CRITICAL)
@@ -146,7 +169,7 @@ def fsck_mirror(name, config, opts):
     flockh = open(config['lock'], 'w')
     try:
         lockf(flockh, LOCK_EX | LOCK_NB)
-    except IOError, ex:
+    except IOError:
         logger.info('Could not obtain exclusive lock on %s' % config['lock'])
         logger.info('Assuming another process is running.')
         return 0
@@ -192,9 +215,9 @@ def fsck_mirror(name, config, opts):
             nextdate = today + datetime.timedelta(days=delay)
             nextcheck = nextdate.strftime('%F')
             status[fullpath] = {
-                    'lastcheck': 'never',
-                    'nextcheck': nextcheck,
-                    }
+                'lastcheck': 'never',
+                'nextcheck': nextcheck,
+            }
             logger.info('Added new repository %s with next check on %s' % (
                 gitdir, nextcheck))
             workdone = True
@@ -216,9 +239,9 @@ def fsck_mirror(name, config, opts):
         # XXX: If a system comes up after being in downtime for a while, this
         #      may cause pain for them, so perhaps use randomization here?
         nextcheck = datetime.datetime.strptime(status[fullpath]['nextcheck'],
-                '%Y-%m-%d')
+                                               '%Y-%m-%d')
 
-        if opts.force or nextcheck <= today:
+        if force or nextcheck <= today:
             logger.debug('Queueing to check %s' % fullpath)
             # Calculate elapsed seconds
             startt = time.time()
@@ -228,7 +251,7 @@ def fsck_mirror(name, config, opts):
             status[fullpath]['lastcheck'] = todayiso
             status[fullpath]['s_elapsed'] = round(endt - startt, 2)
 
-            if opts.force:
+            if force:
                 # Use randomization for next check, again
                 delay = random.randint(1, frequency)
             else:
@@ -303,33 +326,36 @@ def fsck_mirror(name, config, opts):
     flockh.close()
 
 
-if __name__ == '__main__':
+def parse_args():
     from optparse import OptionParser
-    from ConfigParser import ConfigParser
 
     usage = '''usage: %prog -c fsck.conf
     Run a git-fsck check on grokmirror-managed repositories.
     '''
 
-    parser = OptionParser(usage=usage, version=grokmirror.VERSION)
-    parser.add_option('-v', '--verbose', dest='verbose', action='store_true',
-        default=False,
-        help='Be verbose and tell us what you are doing')
-    parser.add_option('-f', '--force', dest='force',
-        action='store_true', default=False,
-        help='Force immediate run on all repositories.')
-    parser.add_option('-c', '--config', dest='config',
-        help='Location of fsck.conf')
+    op = OptionParser(usage=usage, version=grokmirror.VERSION)
+    op.add_option('-v', '--verbose', dest='verbose', action='store_true',
+                  default=False,
+                  help='Be verbose and tell us what you are doing')
+    op.add_option('-f', '--force', dest='force',
+                  action='store_true', default=False,
+                  help='Force immediate run on all repositories.')
+    op.add_option('-c', '--config', dest='config',
+                  help='Location of fsck.conf')
 
-    (opts, args) = parser.parse_args()
+    opts, args = op.parse_args()
 
     if not opts.config:
-        parser.error('You must provide the path to the config file')
+        op.error('You must provide the path to the config file')
+
+    return opts, args
+
+
+def grok_fsck(config, verbose=False, force=False):
+    from ConfigParser import ConfigParser
 
     ini = ConfigParser()
-    ini.read(opts.config)
-
-    retval = 0
+    ini.read(config)
 
     for section in ini.sections():
         config = {}
@@ -350,6 +376,13 @@ if __name__ == '__main__':
                 ignore_errors.append(estring.strip())
             config['ignore_errors'] = ignore_errors
 
-        fsck_mirror(section, config, opts)
+        fsck_mirror(section, config, verbose, force)
 
 
+def command():
+    opts, args = parse_args()
+
+    return grok_fsck(opts.config, opts.verbose, opts.force)
+
+if __name__ == '__main__':
+    command()
